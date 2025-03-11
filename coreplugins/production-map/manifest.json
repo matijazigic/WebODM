@@ -1,0 +1,13 @@
+{
+	"name": "NDVI Production Map",
+	"webodmMinVersion": "0.6.0",
+	"description": "A plugin to create NDVI production maps from multiple multispectral ortophotos.",
+	"version": "0.0.1",
+	"author": "Matija Zigic",
+	"email": "zigic.matija@gmail.com",
+	"repository": "https://github.com/OpenDroneMap/WebODM",
+	"tags": ["ndvi", "production-map", "multispectral"],
+	"homepage": "https://github.com/OpenDroneMap/WebODM",
+	"experimental": true,
+	"deprecated": false
+}

@@ -1,0 +1,19 @@
+.leaflet-control-custom-button {
+    background-color: #fff;
+    border: 2px solid rgba(0,0,0,0.2);
+    background-clip: padding-box;
+    border-radius: 4px;
+    font-size: 18px;
+    text-align: center;
+    width: 34px;
+    height: 34px;
+    padding: 5px 5px;
+    cursor: pointer;
+}
+
+.leaflet-control-custom-button a{
+    color: #000;
+}
+.leaflet-control-custom-button i {
+    line-height: 24px; /* Vertically center icon */
+}
