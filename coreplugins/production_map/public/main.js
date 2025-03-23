@@ -1,6 +1,6 @@
 PluginsAPI.Map.willAddControls([
-    'production-map/build/ProductionMap.js',
-    'production-map/build/ProductionMap.css'
+    'production_map/build/ProductionMap.js',
+    'production_map/build/ProductionMap.css'
 ], function(args, ProductionMap){
 var tasks = [];
 var metaUrls = [];
