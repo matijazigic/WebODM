@@ -29,6 +29,7 @@ from app.plugins.signals import task_completed, task_removed, task_removing
 from app.tests.classes import BootTransactionTestCase
 from nodeodm import status_codes
 from nodeodm.models import ProcessingNode
+from guardian.shortcuts import assign_perm
 from app.testwatch import testWatch
 from .utils import start_processing_node, clear_test_media_root, catch_signal
 
@@ -71,7 +72,9 @@ class TestApiTask(BootTransactionTestCase):
 
             # Create processing node
             pnode = ProcessingNode.objects.create(hostname="localhost", port=11223)
-
+            assign_perm('view_processingnode', user, pnode)
+            assign_perm('view_processingnode', other_user, pnode)
+            
             # Verify that it's working
             self.assertTrue(pnode.api_version is not None)
 
@@ -829,6 +832,36 @@ class TestApiTask(BootTransactionTestCase):
             res = other_client.post("/api/projects/{}/tasks/{}/3d/scene".format(project.id, task.id), json.dumps({ "type": "Potree", "modified": True }), content_type="application/json")
             self.assertEqual(res.status_code, status.HTTP_200_OK)
 
+            # Revert edit
+            res = client.patch("/api/projects/{}/tasks/{}/".format(project.id, task.id), {
+                'public': False,
+                'public_edit': False
+            })
+            
+            # Cannot save again
+            res = other_client.post("/api/projects/{}/tasks/{}/3d/cameraview".format(project.id, task.id), json.dumps({ "position": [0,0,0], "target": [0,0,0] }), content_type="application/json")
+            self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+            
+            # Cannot access project information via project id (which could be enumerated)
+            res = other_client.get("/api/projects/{}/".format(project.id))
+            self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+            
+            # Share entire project
+            res = client.patch("/api/projects/{}/".format(project.id), {
+                'public': True,
+                'public_edit': True
+            })
+
+            # Still cannot access project information via project id (which could be enumerated)
+            res = other_client.get("/api/projects/{}/".format(project.id))
+            self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+            
+            # Can now save since it's shared/editable project-wise
+            res = other_client.post("/api/projects/{}/tasks/{}/3d/cameraview".format(project.id, task.id), json.dumps({ "position": [0,0,0], "target": [0,0,0] }), content_type="application/json")
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+            res = other_client.post("/api/projects/{}/tasks/{}/3d/scene".format(project.id, task.id), json.dumps({ "type": "Potree", "modified": True }), content_type="application/json")
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+
             # User logs out
             other_client.logout()
 
@@ -963,7 +996,6 @@ class TestApiTask(BootTransactionTestCase):
             task.refresh_from_db()
             self.assertTrue(task.last_error is None)
 
-
             # Reassigning the task to another project should move its assets
             self.assertTrue(os.path.exists(full_task_directory_path(task.id, project.id)))
             self.assertTrue(len(task.scan_images()) == 2)
@@ -973,6 +1005,23 @@ class TestApiTask(BootTransactionTestCase):
             task.refresh_from_db()
             self.assertFalse(os.path.exists(full_task_directory_path(task.id, project.id)))
             self.assertTrue(os.path.exists(full_task_directory_path(task.id, other_project.id)))
+
+            # Move back
+            task.project = project
+            task.save()
+            task.refresh_from_db()
+
+            # Compacting the task should remove the images
+            # but not the assets
+            self.assertTrue(len(os.listdir(task.assets_path())) > 0)
+            self.assertEqual(len(task.scan_images()), 2)
+
+            res = client.post("/api/projects/{}/tasks/{}/compact/".format(project.id, task.id))
+            self.assertEqual(res.status_code, status.HTTP_200_OK)
+            task.refresh_from_db()
+
+            self.assertTrue(len(os.listdir(task.assets_path())) > 0)
+            self.assertEqual(len(task.scan_images()), 0)            
 
         # Restart node-odm as to not generate orthophotos
         testWatch.clear()
@@ -1078,6 +1127,8 @@ class TestApiTask(BootTransactionTestCase):
         task = Task.objects.create(project=project, name="Test")
         pnode = ProcessingNode.objects.create(hostname="invalid-host", port=11223)
         another_pnode = ProcessingNode.objects.create(hostname="invalid-host-2", port=11223)
+        assign_perm('view_processingnode', project.owner, pnode)
+        assign_perm('view_processingnode', project.owner, another_pnode)
 
         # By default
         self.assertTrue(task.auto_processing_node)
@@ -1162,6 +1213,8 @@ class TestApiTask(BootTransactionTestCase):
 
         # Bring a processing node online
         pnode = ProcessingNode.objects.create(hostname="invalid-host", port=11223)
+        assign_perm('view_processingnode', user, pnode)
+
         pnode.last_refreshed = timezone.now()
         pnode.save()
         self.assertTrue(pnode.is_online())
@@ -1186,7 +1239,8 @@ class TestApiTask(BootTransactionTestCase):
             )
 
             pnode = ProcessingNode.objects.create(hostname="localhost", port=11223)
-
+            assign_perm('view_processingnode', user, pnode)
+            
             # task creation via chunked upload
             image1 = open("app/fixtures/tiny_drone_image.jpg", 'rb')
             image2 = open("app/fixtures/tiny_drone_image_2.jpg", 'rb')

@@ -50,7 +50,8 @@ class Map extends React.Component {
     publicEdit: PropTypes.bool,
     shareButtons: PropTypes.bool,
     permissions: PropTypes.array,
-    thermal: PropTypes.bool
+    thermal: PropTypes.bool,
+    project: PropTypes.object
   };
 
   constructor(props) {
@@ -106,12 +107,12 @@ class Map extends React.Component {
     }
   }
 
-  typeToHuman = (type) => {
+  typeToHuman = (type, thermal = false) => {
       switch(type){
           case "orthophoto":
               return _("Orthophoto");
           case "plant":
-              return this.props.thermal ? _("Thermal") : _("Plant Health");
+              return thermal ? _("Thermal") : _("Plant Health");
           case "dsm":
               return _("Surface Model");
           case "dtm":
@@ -120,12 +121,12 @@ class Map extends React.Component {
       return "";
   }
 
-  typeToIcon = (type) => {
+  typeToIcon = (type, thermal = false) => {
     switch(type){
         case "orthophoto":
             return "far fa-image fa-fw"
         case "plant":
-            return this.props.thermal ? "fa fa-thermometer-half fa-fw" : "fa fa-seedling fa-fw";
+            return thermal ? "fa fa-thermometer-half fa-fw" : "fa fa-seedling fa-fw";
         case "dsm":
         case "dtm":
             return "fa fa-chart-area fa-fw";
@@ -265,8 +266,12 @@ class Map extends React.Component {
                 });
             
             // Associate metadata with this layer
-            meta.name = this.typeToHuman(type);
-            meta.icon = this.typeToIcon(type);
+            let thermal = typeof(mres) === 'object' && mres.band_descriptions && 
+                          Array.isArray(mres.band_descriptions) && mres.band_descriptions.length > 0 &&
+                          mres.band_descriptions[0].indexOf("lwir") !== -1;
+
+            meta.name = this.typeToHuman(type, this.props.thermal || thermal);
+            meta.icon = this.typeToIcon(type, this.props.thermal || thermal);
             meta.type = type;
             meta.raster = true;
             meta.autoExpand = this.taskCount === 1 && type === this.props.mapType;
@@ -833,15 +838,18 @@ _('Example:'),
         />
 
         <div className="actionButtons">
+          
           {this.state.pluginActionButtons.map((button, i) => <div key={i}>{button}</div>)}
-          {(this.props.shareButtons && !this.props.public && this.state.singleTask !== null) ? 
+          {((this.state.singleTask || this.props.project) && this.props.shareButtons && !this.props.public) ? 
             <ShareButton 
               ref={(ref) => { this.shareButton = ref; }}
-              task={this.state.singleTask} 
+              task={this.state.singleTask}
+              project={this.props.project}
               linksTarget="map"
               queryParams={{t: this.props.mapType}}
             />
           : ""}
+          
           <SwitchModeButton 
             task={this.state.singleTask}
             type="mapToModel" 
