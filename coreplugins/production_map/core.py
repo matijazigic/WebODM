@@ -1,12 +1,12 @@
+import subprocess
 import rasterio
 import numpy as np
 import cv2
 import os
-from pyproj import Transformer
-from shapely import Polygon
-import geojson
 
 import logging
+
+from webodm import settings
 
 logger = logging.getLogger('app.logger')
 
@@ -38,11 +38,32 @@ class ProductionMapGenerator:
             image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
         return image
-    
+
+    def upsample_image(self, image, orig_height, orig_width):
+        """
+        Upsamples the given image using OpenCV's resize function.
+
+        Args:
+            image (np.ndarray): The image to upsample.
+            scale_factor (float): The factor by which to scale the image (e.g., 2 for 2x upsampling).
+
+        Returns:
+            np.ndarray: The upsampled image.
+        """
+
+        if len(image.shape) == 3:
+            upsampled_image = cv2.resize(image, (orig_width, orig_height), interpolation=cv2.INTER_NEAREST)
+        else:
+            upsampled_image = cv2.resize(image, (orig_width, orig_height), interpolation=cv2.INTER_NEAREST)
+
+        return upsampled_image
+
     def downsample_image(self, path, downsample_resolution = 5):
         import subprocess
 
-        output_name = os.path.splitext(os.path.basename(path))[0] + "_downsampled.tif"
+        path_without_ext, extension = os.path.splitext(path)
+        output_name = path_without_ext + "_downsampled.tif"
+        
         if os.path.exists(output_name):
             os.remove(output_name)
 
@@ -65,10 +86,38 @@ class ProductionMapGenerator:
         try:
             self.dataset_downsampled = rasterio.open(output_name)
         except rasterio.errors.RasterioIOError as e:
-            print(f"Error opening file: {e}")
+            logger.error(f"Error opening file: {e}")
             raise
         
         return self.load_image(self.dataset_downsampled)
+    
+    def convert_to_label_index_image(self, classified_image):
+        """
+        Converts the classified image into a label index image where each unique color is assigned a unique label.
+
+        Args:
+            classified_image (np.ndarray): The classified image with unique colors.
+
+        Returns:
+            np.ndarray: The label index image.
+        """
+        # Ensure the classified image is in the correct format (e.g., uint8)
+        if classified_image.dtype != np.uint8:
+            classified_image = classified_image.astype(np.uint8)
+
+        # Identify unique colors in the classified image
+        unique_colors = np.unique(classified_image.reshape(-1, classified_image.shape[2]), axis=0)
+
+        # Create a mapping from unique colors to labels
+        color_to_label = {tuple(color): label for label, color in enumerate(unique_colors)}
+
+        # Create the label index image
+        label_index_image = np.zeros(classified_image.shape[:2], dtype=np.uint8)
+        for color, label in color_to_label.items():
+            mask = np.all(classified_image == color, axis=-1)
+            label_index_image[mask] = label
+
+        return label_index_image
         
     def get_largest_contour_mask(self, image):
         """Find the largest contour and create a mask for it."""
@@ -247,20 +296,124 @@ class ProductionMapGenerator:
 
         return upsampled_contours_dict
 
-    def process(self, downsample_size = 1, color_cluster_num = 2, min_contour_size = 10):
+    def save_raster_image(self, image, output_filename):
+        """
+        Saves the classified image as a GeoTIFF file, preserving the original metadata.
+
+        Args:
+            classified_image (np.ndarray): The classified image data.
+            output_filename (str): The name of the output GeoTIFF file.
+        """
+        if not self.dataset:
+            print("Dataset not loaded.")
+            return
+
+        # Ensure the classified image is in the correct format (e.g., uint8)
+        if image.dtype != np.uint8:
+            image = image.astype(np.uint8)
+
+        # Get the metadata from the original dataset
+        profile = self.dataset.profile
+
+        # Update the metadata for the classified image
+        profile.update({
+            'dtype': image.dtype,
+            'count': 3 if len(image.shape) == 3 else 1,  # Adjust count based on image shape
+            'height': image.shape[0],
+            'width': image.shape[1],
+            'compress': 'lzw',
+            'nodata': 0
+        })
+
+        # Write the classified image to a new GeoTIFF file
+        with rasterio.open(output_filename, 'w', **profile) as dst:
+            if len(image.shape) == 3:
+                # If the image is RGB, write each band separately
+                for i in range(3):
+                    dst.write(image[:, :, i], i + 1)
+            else:
+                # If the image is single-band, write it directly
+                dst.write(image, 1)
+
+    def polygonize_raster(self, raster_path, output_path, layer_name):
+        """
+        Polygonizes a raster file using gdal_polygonize.py.
+
+        Args:
+            raster_path (str): Path to the input raster file.
+            output_path (str): Path to the output vector file (GPKG or GeoJSON).
+        """
+
+        cmd = [
+            "gdal_polygonize.py",
+            raster_path,
+            "-b", "1",  # Use band 1
+            "-f", "GPKG",
+            output_path,
+            layer_name,  # layer name
+            "label"  # attribute field name explicitly for labels
+        ]
+        
+        subprocess.run(cmd, check=True)
+
+    def simplify_polygons(self, input_gpkg, output_gpkg, layer_name, tolerance):
+        """
+        Simplifies polygon geometries in a GeoPackage file using a given tolerance while preserving topology.
+
+        Parameters:
+        - input_gpkg (str): Input file path to the original polygonized raster GeoPackage.
+        - output_gpkg (str): Output file path for the simplified polygons GeoPackage.
+        - layer_name (str): Name of the input layer within the input GeoPackage.
+        - tolerance (float): Tolerance value for simplification. Higher values produce simpler geometries.
+        """
+        subprocess.run([
+            "ogr2ogr",
+            "-f", "GPKG",
+            "-nln", "simplified_layer",
+            output_gpkg,
+            input_gpkg,
+            "-dialect", "sqlite",
+            "-sql", f"""
+                SELECT
+                    ST_SimplifyPreserveTopology(geom, {tolerance}) AS geom,
+                    label
+                FROM {layer_name}"""
+        ], check=True)
+        
+    def convert_to_geojson(self, input_gpkg, geojson_output):
+        """
+        Converts the simplified polygons to a GeoJSON file in EPSG:4326 coordinate system.
+
+        Parameters:
+        - input_gpkg (str): Input file path to the original polygonized raster GeoPackage.
+        - geojson_output (str): Output file path for the GeoJSON file.
+        """
+        subprocess.run([
+            "ogr2ogr",
+            "-f", "GeoJSON",
+            "-t_srs", "EPSG:4326",
+            geojson_output,
+            input_gpkg
+        ], check=True)
+        
+    def delete_file(self, path):
+        if os.path.exists(path):
+            os.remove(path)
+
+    def process(self, downsample_size = 1, color_cluster_num = 2):
         """Full pipeline: Load image, find colors, classify pixels, determine contours."""
-        original_pixel_size_x = 0.05
-        original_pixel_size_y = 0.05
+        #original_pixel_size_x = 0.05
+        #original_pixel_size_y = 0.05
         if downsample_size > 0:
             image = self.downsample_image(self.input_file_paths[0], downsample_size)
-            original_pixel_size_x = self.dataset_downsampled.transform[0]
-            original_pixel_size_y = -self.dataset_downsampled.transform[4]
-            scale_factor = self.dataset_downsampled.transform[0] / self.dataset.transform[0]
+            #original_pixel_size_x = self.dataset_downsampled.transform[0]
+            #original_pixel_size_y = -self.dataset_downsampled.transform[4]
+            #scale_factor = self.dataset_downsampled.transform[0] / self.dataset.transform[0]
         else:
             image = self.load_image(self.dataset)
-            original_pixel_size_x = self.dataset.transform[0]
-            original_pixel_size_y = -self.dataset.transform[4]
-            scale_factor = 1
+            #original_pixel_size_x = self.dataset.transform[0]
+            #original_pixel_size_y = -self.dataset.transform[4]
+            #scale_factor = 1
 
         contour_mask = self.get_largest_contour_mask(image)
 
@@ -272,18 +425,51 @@ class ProductionMapGenerator:
         
         self.apply_morphological_operators(classified_image, contour_mask, primary_colors)
     
-        contours_dict = self.determine_contours(classified_image, primary_colors)
+        # Convert the classified image to a label index image
+        label_index_image = self.convert_to_label_index_image(classified_image)
+    
+        # Upsample the label index image
+        upsampled_label_index_image = self.upsample_image(label_index_image, self.dataset.height, self.dataset.width)
+    
+        # Save the classified image
+        tmp_dir_path = os.path.dirname(os.path.abspath(self.output_file_path))
+        tmp_labeled_image_path = os.path.join(tmp_dir_path, 'labeled_index.tif')
         
-        filtered_contours_dict = {
-            color: [cnt for cnt in cnt_list if cv2.contourArea(cnt) > min_contour_size]
-            for color, cnt_list in contours_dict.items()
-        }
+        # Save image to original size tiff
+        self.save_raster_image(upsampled_label_index_image, tmp_labeled_image_path)
+        
+        tmp_polygonize_raster_path = os.path.join(tmp_dir_path, 'polygonized_raster.gpkg')
+        tmp_layer = "polygonized_layer"
+        # Polygonize the raster
+        self.polygonize_raster(
+            tmp_labeled_image_path,
+            tmp_polygonize_raster_path,
+            tmp_layer
+        )
+        
+        self.delete_file(tmp_labeled_image_path)
+        
+        tolerance = 0.25
+        tmp_simplified_polygonize_raster_path = os.path.join(tmp_dir_path, 'simplified_polygonized_raster.gpkg')
+        self.simplify_polygons(tmp_polygonize_raster_path, tmp_simplified_polygonize_raster_path, tmp_layer, tolerance)
+        
+        self.delete_file(tmp_polygonize_raster_path)
+        
+        self.convert_to_geojson(tmp_simplified_polygonize_raster_path, self.output_file_path)
+        
+        ############################## OLD STUFF ##################################
+        # contours_dict = self.determine_contours(classified_image, primary_colors)
+        
+        # filtered_contours_dict = {
+        #     color: [cnt for cnt in cnt_list if cv2.contourArea(cnt) > min_contour_size]
+        #     for color, cnt_list in contours_dict.items()
+        # }
 
         # #self.display_results(image, classified_image, contour_mask, filtered_contours_dict)
         
-        upsampled_contours_dict = self.apply_upsamling(filtered_contours_dict, scale_factor)
+        #upsampled_contours_dict = self.apply_upsamling(filtered_contours_dict, scale_factor)
         
-        self.generate_geojson(upsampled_contours_dict)
+        #return self.generate_geojson(upsampled_contours_dict)
 
     def generate_geojson(self, contours_dict, output_geojson="output.geojson"):
         """

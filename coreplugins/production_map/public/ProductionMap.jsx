@@ -216,19 +216,13 @@ class ProductionMapButton extends React.Component {
                 if (error) this.setState({ error: "No production map to load", loading: false });
                 else{
                     console.log('Production map generated!');
-                    // const fileUrl = `/api/plugins/contours/task/${taskId}/contours/download/${result.celery_task_id}`;
 
-                    // // Preview
-                    // if (isPreview){
-                    // this.addGeoJSONFromURL(fileUrl, e => {
-                    //     if (e) this.setState({error: JSON.stringify(e)});
-                    //     this.setState({[loadingProp]: false});
-                    // });
-                    // }else{
-                    // // Download
-                    // location.href = fileUrl;
-                    // this.setState({[loadingProp]: false});
-                    // }
+                    const fileUrl = `/api/plugins/production_map/task/${taskId}/production_map/download/${result.celery_task_id}`;
+
+                    this.addGeoJSONFromURL(fileUrl, e => {
+                        if (e) this.setState({error: JSON.stringify(e)});
+                        this.setState();
+                    });
                 }
                 });
             }else if (result.error){
@@ -239,6 +233,36 @@ class ProductionMapButton extends React.Component {
         }).fail(error => {
             this.setState({loading: false , error: JSON.stringify(error)});
         });
+    }
+
+    addGeoJSONFromURL = (url, cb) => {
+    const { map } = this.props;
+
+    $.getJSON(url)
+        .done((geojson) => {
+        try{
+        //this.handleRemovePreview();
+        console.log("Inside getJSON...")
+        this.setState({previewLayer: L.geoJSON(geojson, {
+            onEachFeature: (feature, layer) => {
+                //TODO: add descriptions based on different zones
+                // if (feature.properties && feature.properties.level !== undefined) {
+                //     layer.bindPopup(`<div style="margin-right: 32px;"><b>${_("Elevation:")}</b> ${us.elevation(feature.properties.level)}</div>`);
+                // }
+            },
+            style: feature => {
+                return {color: "lightblue", opacity: 0.7};
+            }
+        })});
+        this.state.previewLayer.addTo(map);
+
+        cb();
+        } catch(e) {
+            cb(e.message);
+        }
+
+        })
+        .fail(cb);
     }
 
     componentWillUnmount() {

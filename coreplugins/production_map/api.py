@@ -54,8 +54,9 @@ def calc_production_map(ndvi_image_paths, task_id):
         
         except Exception as e:
             logger.info(f"An error occurred: {e}")
-        
-    logger.info(f"Returning..............................................")
+    
+    # TODo what if doesn't exist
+    logger.info(f"Returning with file path {output_path}")
     return {'file': output_path}
 
 
