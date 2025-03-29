@@ -6,14 +6,14 @@ import os
 
 import logging
 
-from webodm import settings
-
 logger = logging.getLogger('app.logger')
 
 class ProductionMapGenerator:
-    def __init__(self, input_file_paths, output_file_path):
+    def __init__(self, input_file_paths, downsample_size, num_of_zones, output_file_path):
         self.input_file_paths = input_file_paths
         self.output_file_path = output_file_path
+        self.downsample_size = downsample_size
+        self.num_of_clusters = num_of_zones
         
         try:
             self.dataset = rasterio.open(input_file_paths[0])
@@ -400,12 +400,12 @@ class ProductionMapGenerator:
         if os.path.exists(path):
             os.remove(path)
 
-    def process(self, downsample_size = 1, color_cluster_num = 2):
+    def process(self):
         """Full pipeline: Load image, find colors, classify pixels, determine contours."""
         #original_pixel_size_x = 0.05
         #original_pixel_size_y = 0.05
-        if downsample_size > 0:
-            image = self.downsample_image(self.input_file_paths[0], downsample_size)
+        if self.downsample_size > 0:
+            image = self.downsample_image(self.input_file_paths[0], self.downsample_size)
             #original_pixel_size_x = self.dataset_downsampled.transform[0]
             #original_pixel_size_y = -self.dataset_downsampled.transform[4]
             #scale_factor = self.dataset_downsampled.transform[0] / self.dataset.transform[0]
@@ -418,7 +418,7 @@ class ProductionMapGenerator:
         contour_mask = self.get_largest_contour_mask(image)
 
         # # Find primary colors inside the contour
-        primary_colors = self.determine_clusters(image, contour_mask, num_clusters = color_cluster_num)
+        primary_colors = self.determine_clusters(image, contour_mask, num_clusters = self.num_of_clusters)
         
         # # Classify pixels using primary colors
         classified_image = self.determine_closest_color(image, contour_mask, primary_colors)

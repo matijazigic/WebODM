@@ -9,7 +9,7 @@ class Plugin(PluginBase):
         return ['main.js']
 
     def build_jsx_components(self):
-        return ['ProductionMap.jsx']
+        return ['ProductionMap.jsx', 'ProductionMapPanel.jsx']
 
     def api_mount_points(self):       
         return [

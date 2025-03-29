@@ -12,7 +12,7 @@ class ProductionMapException(Exception):
     pass
 
 #WORKER
-def calc_production_map(ndvi_image_paths, task_id):
+def calc_production_map(ndvi_image_paths, task_id, downsample_size, num_of_zones):
     from app.plugins.functions import get_plugin_by_name  
     from webodm import settings
     import logging
@@ -48,7 +48,7 @@ def calc_production_map(ndvi_image_paths, task_id):
         
         try:
             logger.info(f"Processing ... {ndvi_image_paths[0]}")
-            with ProductionMapGenerator(ndvi_image_paths, output_path) as generator:
+            with ProductionMapGenerator(ndvi_image_paths, downsample_size, num_of_zones, output_path) as generator:
                 generator.process()
             logger.info(f"End...")
         
@@ -65,9 +65,11 @@ class TaskProductionMapGenerate(TaskView):
     def post(self, request, pk=None):
         task = self.get_and_check_task(request, pk)
         ndvi_paths = request.data.get('ndvi_paths')
+        downsample_size = request.data.get('downsample_size')
+        num_of_zones = request.data.get('num_of_zones')
         
         try:
-            celery_task_id = run_function_async(calc_production_map, ndvi_paths, task.id).task_id
+            celery_task_id = run_function_async(calc_production_map, ndvi_paths, task.id, downsample_size, num_of_zones).task_id
             return Response({'celery_task_id': celery_task_id}, status=status.HTTP_200_OK)
         except ProductionMapException as e:
             return Response({'error': str(e)}, status=status.HTTP_200_OK)
