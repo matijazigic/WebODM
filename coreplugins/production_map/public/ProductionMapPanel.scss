@@ -72,6 +72,13 @@
   
     .action-buttons{
       margin-top: 12px;
+      margin-bottom: 6px;
+    }
+
+    .section-divider {
+      border: 0;
+      border-top: 1px solid #ddd; /* Light gray line */
+      //margin: 12px 0; /* Add spacing above and below the divider */
     }
   }
   
