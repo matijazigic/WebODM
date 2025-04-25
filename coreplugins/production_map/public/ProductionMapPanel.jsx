@@ -7,7 +7,7 @@ import ErrorMessage from 'webodm/components/ErrorMessage';
 import Workers from 'webodm/classes/Workers';
 import { _ } from 'webodm/classes/gettext';
 
-import { ISOXMLManager, TAGS, TaskTaskStatusEnum, LineStringLineStringTypeEnum, ProductGroupProductGroupTypeEnum, PolygonPolygonTypeEnum } from "isoxml";
+import { ISOXMLManager, TAGS, TaskTaskStatusEnum, LineStringLineStringTypeEnum, ProductGroupProductGroupTypeEnum, PolygonPolygonTypeEnum, OperTechPractice, DataLogTrigger, ProductAllocation } from "isoxml";
 import { createGridParamsGenerator } from "isoxml/dist/entities/Grid/DefaultGridParamsGenerator";
 import * as turf from "@turf/turf";
 
@@ -64,8 +64,6 @@ class ISOXMLGenerator {
 
             let raw_value = this.options.zoneValues[label - 1] * ConversionFactorDictionary[this.options.valuePresentation.UnitDesignator];
             raw_value = raw_value / ResolutionDictionary[this.options.valuePresentation.UnitDesignator];
-
-            console.log("Label, raw_value ", label, raw_value);
 
             if (label && this.options.zoneValues[label - 1] !== undefined) {
                 feature.properties.DOSE = raw_value;
@@ -125,17 +123,20 @@ class ISOXMLGenerator {
         });
         this.isoxmlManager.registerEntity(partfield);
         this.isoxmlManager.rootElement.attributes.Partfield = [partfield];
+
         const productGroup = this.isoxmlManager.createEntityFromAttributes(TAGS.ProductGroup, {
             ProductGroupDesignator: this.options.productGroupName,
             ProductGroupType: ProductGroupProductGroupTypeEnum.ProductGroupDefault,
         });
         this.isoxmlManager.registerEntity(productGroup);
         this.isoxmlManager.rootElement.attributes.ProductGroup = [productGroup];
+
         const valuePresentation = this.isoxmlManager.createEntityFromAttributes(TAGS.ValuePresentation, this.options.valuePresentation);
         this.isoxmlManager.registerEntity(valuePresentation);
         this.isoxmlManager.rootElement.attributes.ValuePresentation = [
             valuePresentation,
         ];
+
         const culturalPractice = this.isoxmlManager.createEntityFromAttributes(TAGS.CulturalPractice, {
             CulturalPracticeDesignator: this.options.culturalPracticeName,
         });
@@ -143,6 +144,24 @@ class ISOXMLGenerator {
         this.isoxmlManager.rootElement.attributes.CulturalPractice = [
             culturalPractice,
         ];
+
+        const operTechPractice = this.isoxmlManager.createEntityFromAttributes(TAGS.OperTechPractice, {
+            CulturalPracticeIdRef: this.isoxmlManager.getReferenceByEntity(culturalPractice),
+        });
+        this.isoxmlManager.registerEntity(operTechPractice);
+        this.isoxmlManager.rootElement.attributes.OperTechPractice = [
+            operTechPractice,
+        ];
+
+        const dataLogTrigger = this.isoxmlManager.createEntityFromAttributes(TAGS.DataLogTrigger, {
+            DataLogDDI: "DFFF",
+            DataLogMethod: "31"
+        });
+        this.isoxmlManager.registerEntity(dataLogTrigger);
+        this.isoxmlManager.rootElement.attributes.DataLogTrigger = [
+            dataLogTrigger,
+        ];
+        
         const product = this.isoxmlManager.createEntityFromAttributes(TAGS.Product, {
             ProductDesignator: this.options.productName,
             ProductGroupIdRef: this.isoxmlManager.getReferenceByEntity(productGroup),
@@ -155,19 +174,25 @@ class ISOXMLGenerator {
         });
         this.isoxmlManager.registerEntity(product);
         this.isoxmlManager.rootElement.attributes.Product = [product];
+
+        const productAllocation = this.isoxmlManager.createEntityFromAttributes(TAGS.ProductAllocation, {
+            ProductIdRef: this.isoxmlManager.getReferenceByEntity(product),
+        });
+        //// this.isoxmlManager.registerEntity(productAllocation);
+        //// this.isoxmlManager.rootElement.attributes.Product = [productAllocation];
+
         const task = this.isoxmlManager.createEntityFromAttributes(TAGS.Task, {
             TaskDesignator: this.options.taskDesignator,
             CustomerIdRef: this.isoxmlManager.getReferenceByEntity(customer),
             FarmIdRef: this.isoxmlManager.getReferenceByEntity(farm),
             PartfieldIdRef: this.isoxmlManager.getReferenceByEntity(partfield),
-            ProductGroupIdRef: this.isoxmlManager.getReferenceByEntity(productGroup),
-            ProductIdRef: this.isoxmlManager.getReferenceByEntity(product),
-            CulturalPracticeIdRef: this.isoxmlManager.getReferenceByEntity(culturalPractice),
-            ValuePresentationIdRef: this.isoxmlManager.getReferenceByEntity(valuePresentation),
             TaskStatus: TaskTaskStatusEnum.Planned,
             DefaultTreatmentZoneCode: 1,
+            ProductAllocation: [productAllocation],
+            OperTechPractice: [operTechPractice],
+            DataLogTrigger: [dataLogTrigger],
         });
-        task.addGridFromGeoJSON(geoJson, this.options.gridDDI);
+        task.addGridFromGeoJSON(geoJson, this.options.gridDDI, null, this.isoxmlManager.getReferenceByEntity(valuePresentation));
         this.isoxmlManager.registerEntity(task);
         this.isoxmlManager.rootElement.attributes.Task = [task];
 
@@ -182,9 +207,9 @@ export const SelectedActionDictionary = Object.freeze({
     FERTILIZER: 'Fertilizer',
 });
 
-export const descriptionActionDictionary = Object.freeze({
+export const DescriptionActionDictionary = Object.freeze({
     PLANTING: 'Seed1',
-    CROP_PROTECTION: 'Proection1',
+    CROP_PROTECTION: 'Protection1',
     FERTILIZER: 'Fertilizers1',
 });
 
@@ -621,7 +646,7 @@ export default class ProductionMapPanel extends React.Component {
         const selectedUnit = event.target.value;
 
         const resetZoneValues = this.state.zoneValues.map(() => 0);
-    
+
         this.setState({
             selectedUnit: selectedUnit,
             zoneValues: resetZoneValues,
@@ -631,17 +656,17 @@ export default class ProductionMapPanel extends React.Component {
     handleZoneValueChange = (index, value) => {
         const step = ResolutionDictionary[this.state.selectedUnit] / ConversionFactorDictionary[this.state.selectedUnit];
         const parsedValue = parseFloat(value);
-    
+
         if (!isNaN(parsedValue) && parsedValue >= 0) {
             // Scale values to integers to avoid floating-point precision issues
             const scaledValue = Math.round(parsedValue * 1e10);
             const scaledStep = Math.round(step * 1e10);
-    
+
             if (scaledValue % scaledStep === 0) {
                 const zoneValues = [...this.state.zoneValues];
                 zoneValues[index] = parsedValue;
                 this.setState({ zoneValues });
-    
+
                 console.log("Zone values updated:", zoneValues);
             } else {
                 console.warn(`Invalid input: ${value}. Must be divisible by step: ${step}`);
@@ -652,9 +677,6 @@ export default class ProductionMapPanel extends React.Component {
     };
 
     handleExport = (zoneValues, geoJson, selectedAction, selectedUnit) => {
-
-        console.log("GeoJSON handleExport:", geoJson);
-        console.log("Zone handleExport:", zoneValues);
 
         const generator = new ISOXMLGenerator({
             zoneValues: zoneValues,
@@ -672,9 +694,9 @@ export default class ProductionMapPanel extends React.Component {
                 FarmState: "Shire",
             },
             partfieldName: "Bag End Field",
-            productGroupName: descriptionActionDictionary[selectedAction],
-            culturalPracticeName: descriptionActionDictionary[selectedAction],
-            productName: descriptionActionDictionary[selectedAction],
+            productGroupName: DescriptionActionDictionary[selectedAction.toUpperCase()],
+            culturalPracticeName: DescriptionActionDictionary[selectedAction.toUpperCase()],
+            productName: DescriptionActionDictionary[selectedAction.toUpperCase()],
             valuePresentation: {
                 Offset: 0,
                 Scale: ResolutionDictionary[selectedUnit] / ConversionFactorDictionary[selectedUnit],
@@ -682,7 +704,7 @@ export default class ProductionMapPanel extends React.Component {
                 UnitDesignator: selectedUnit,
             },
             quantityDDI: QuantityDDIDictionary[selectedUnit],
-            taskDesignator: "LoTR task",
+            taskDesignator: "LoTR Task",
             gridDDI: gridDDIDictionary[selectedUnit],
         });
 
