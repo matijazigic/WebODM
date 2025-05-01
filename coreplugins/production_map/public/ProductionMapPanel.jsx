@@ -1,6 +1,6 @@
 import React from 'react';
 import PropTypes from 'prop-types';
-import Storage from 'webodm/classes/Storage';
+//import Storage from 'webodm/classes/Storage';
 import L, { geoJson } from 'leaflet';
 import './ProductionMapPanel.scss';
 import ErrorMessage from 'webodm/components/ErrorMessage';
@@ -213,12 +213,6 @@ export const DescriptionActionDictionary = Object.freeze({
     FERTILIZER: 'Fertilizers1',
 });
 
-// export const ScaleDictionary = Object.freeze({
-//     "kg/ha": 0.01, // 1 kg/ha = 1000 g / 10000 m² = 1000000 mg / 10000 m² = 100 mg/m²
-//     "seeds/ha": 10, // 10 * value / 10000  (1 ha = 10000 m²)
-//     "l/ha": 0.0001,  // 1 l/ha = 1000000 / 10000 mm³/m² = 100 mm³/m²
-// });
-
 export const ResolutionDictionary = Object.freeze({
     "kg/ha": 1, // based in DDI resolution , mg/m²
     "seeds/ha": 0.001, // based in DDI resolution , /m² 
@@ -263,14 +257,6 @@ export default class ProductionMapPanel extends React.Component {
             step_dict: { 0: 'Initialization', 1: 'Fetching statistics', 2: 'Loading NDVI', 3: 'Getting NDVI', 4: 'Got NDVI', 5: 'Generate production map', 6: 'Getting GeoJSON', 7: 'Got GeoJSON', 8: 'Getting isoxml', 9: 'Got isoxml' },
             error: "",
             permanentError: "",
-            // interval: Storage.getItem("last_contours_interval_" + unitSystem) || defaultInterval,
-            // customInterval: Storage.getItem("last_contours_custom_interval_" + unitSystem) || defaultInterval,
-            // simplify: Storage.getItem("last_contours_simplify_" + unitSystem) || defaultSimplify,
-            // customSimplify: Storage.getItem("last_contours_custom_simplify_" + unitSystem) || defaultSimplify,
-            //layer: "",
-            // epsg: Storage.getItem("last_contours_epsg") || "4326",
-            // customEpsg: Storage.getItem("last_contours_custom_epsg") || "4326",
-            //layers: [],
             task: props.tasks[0] || null,
             ndvi_paths: [],
             productionMapLayer: null,
@@ -280,12 +266,10 @@ export default class ProductionMapPanel extends React.Component {
             selectedAction: null,
             selectedUnit: "kg/ha",
             zoneValues: [0.0, 0.0]
-            //unitSystem
         };
     }
 
     componentDidMount() {
-        //onUnitSystemChanged(this.unitsChanged);
     }
 
     componentDidUpdate(prevProps, prevState) {
@@ -542,7 +526,7 @@ export default class ProductionMapPanel extends React.Component {
 
         //COLORS
         const leafletColors = [
-            "red", "blue", "green", "orange", "purple", "darkred", "darkblue", "darkgreen", "darkorange", "darkpurple"
+            "red", "green", "orange", "darkred", "darkgreen", "darkorange"
         ];
 
         const labelColorCache = {};

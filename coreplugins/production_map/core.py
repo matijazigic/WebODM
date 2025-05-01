@@ -3,20 +3,155 @@ import rasterio
 import numpy as np
 import cv2
 import os
+import re
+import sys
 
 import logging
 
 logger = logging.getLogger('app.logger')
 
+class RasterAveragingProcessor:
+    def __init__(self):
+        pass
+    
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    @staticmethod
+    def run_command(command):
+        """Run a shell command and handle errors."""
+        try:
+            subprocess.run(command, shell=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error: Command failed with exit code {e.returncode}")
+            sys.exit(1)
+
+    @staticmethod
+    def extract_extent_and_pixel_size(ref):
+        """Extract extent and pixel size from the reference raster using gdalinfo."""
+        gdalinfo_output = subprocess.check_output(f"gdalinfo {ref}", shell=True, text=True)
+
+        # Extract pixel size
+        pat = re.compile(r"""Pixel\s+Size\s*=\s*\(\s*
+                            ([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)
+                            \s*,\s*
+                            ([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)
+                            \s*\)""", re.VERBOSE)
+        m = pat.search(gdalinfo_output)
+        if not m:
+            raise ValueError("Could not extract pixel size from gdalinfo output.")
+        px, py = map(float, m.groups())
+
+        # Extract extent
+        pat_ul = re.compile(r"""
+        Upper\s+Left\s*             
+        \(\s*([+-]?\d+(?:\.\d+)?)    
+        \s*,\s*
+        ([+-]?\d+(?:\.\d+)?)         
+        \s*\)
+        """, re.VERBOSE)
+        m = pat_ul.search(gdalinfo_output)
+        if not m:
+            raise ValueError("Could not extract Upper Left corner from gdalinfo output.")
+        x_ul, y_ul = map(float, m.groups())
+
+        pat_lr = re.compile(r"""
+        Lower\s+Right\s*
+        \(\s*([+-]?\d+(?:\.\d+)?)    
+        \s*,\s*
+        ([+-]?\d+(?:\.\d+)?)      
+        \s*\)
+        """, re.VERBOSE)
+        m = pat_lr.search(gdalinfo_output)
+        if not m:
+            raise ValueError("Could not extract Lower Right corner from gdalinfo output.")
+        x_lr, y_lr = map(float, m.groups())
+
+        xmin, ymax = float(x_ul), float(y_ul)
+        xmax, ymin = float(x_lr), float(y_lr)
+
+        return px, py, xmin, ymin, xmax, ymax
+
+    def align_rasters(self, input_rasters, output_folder):
+        """
+        Align multiple input rasters to the grid of the first raster in the list.
+
+        Args:
+            input_rasters (list): List of input raster paths. The first raster is treated as the reference.
+            output_folder (str): Folder to save the aligned rasters.
+
+        Returns:
+            list: List of paths to the aligned rasters.
+        """
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
+        ref = input_rasters[0]
+        px, py, xmin, ymin, xmax, ymax = self.extract_extent_and_pixel_size(ref)
+
+        aligned_rasters = []
+        for input_raster in input_rasters:
+            output_raster = f"{output_folder}/{os.path.basename(input_raster).replace('.tif', '_aligned.tif')}"
+            aligned_rasters.append(output_raster)
+
+            gdalwarp_command = (
+                f"gdalwarp -te {xmin} {ymin} {xmax} {ymax} -tr {px} {py} -tap "
+                f"-r near -dstnodata -9999 -overwrite {input_raster} {output_raster}"
+            )
+            logger.info(f"Running: {gdalwarp_command}")
+            self.run_command(gdalwarp_command)
+
+        return aligned_rasters
+
+    def average_rasters(self, input_rasters, output_path):
+        """
+        Averages multiple raster files and writes the result to a new file.
+
+        Args:
+            input_rasters (list): List of paths to input rasters.
+            output_path (str): Path to the output raster.
+        """
+        with rasterio.open(input_rasters[0]) as ref_raster:
+            # Initialize an array to accumulate the sum of rasters
+            sum_array = np.zeros((ref_raster.count, ref_raster.height, ref_raster.width), dtype="float32")
+            mask = None
+
+            for raster_path in input_rasters:
+                with rasterio.open(raster_path) as src:
+                    assert src.shape == ref_raster.shape, "All rasters must have the same dimensions"
+                    data = src.read(masked=True).astype("float32")
+                    sum_array += data
+                    if mask is None:
+                        mask = data.mask
+                    else:
+                        mask |= data.mask
+
+            avg_array = (sum_array / len(input_rasters)).astype("uint8")
+            avg_array = np.ma.array(avg_array, mask=mask).filled(0)
+
+            profile = ref_raster.profile.copy()
+            profile.update(
+                driver="GTiff",
+                dtype="uint8",
+                nodata=255,
+                # compress="LZW"
+            )
+
+        with rasterio.open(output_path, "w", **profile) as dst:
+            dst.write(avg_array)
+
 class ProductionMapGenerator:
-    def __init__(self, input_file_paths, downsample_size, num_of_zones, output_file_path):
-        self.input_file_paths = input_file_paths
+    def __init__(self, input_file_path, downsample_size, num_of_zones, output_file_path):
+        self.input_file_path = input_file_path
         self.output_file_path = output_file_path
         self.downsample_size = downsample_size
         self.num_of_clusters = num_of_zones
         
         try:
-            self.dataset = rasterio.open(input_file_paths[0])
+            self.dataset = rasterio.open(input_file_path)
         except rasterio.errors.RasterioIOError as e:
             logger.error(f"Error opening file: {e}")
             raise
@@ -116,8 +251,10 @@ class ProductionMapGenerator:
         for color, label in color_to_label.items():
             mask = np.all(classified_image == color, axis=-1)
             label_index_image[mask] = label
+            
+        label_to_color = {label: color for color, label in color_to_label.items()}
 
-        return label_index_image
+        return label_index_image, label_to_color
         
     def get_largest_contour_mask(self, image):
         """Find the largest contour and create a mask for it."""
@@ -153,53 +290,52 @@ class ProductionMapGenerator:
             print("Not enough pixels inside the contour for clustering.")
             return np.array([[0, 0, 0]] * num_clusters, dtype=np.uint8)
 
-        # **Prepare data for OpenCV kmeans**
         data = inside_pixels_lab.astype(np.float32)
 
-        # **Apply OpenCV K-Means Clustering**
+        #Apply OpenCV K-Means Clustering
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
         _, labels, centers = cv2.kmeans(data, num_clusters, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
 
-        # **Extract k dominant colors**
+        #Extract k dominant colors
         primary_colors_lab = centers.astype(np.uint8)
         primary_colors_rgb = cv2.cvtColor(primary_colors_lab.reshape(1, -1, 3), cv2.COLOR_LAB2RGB).reshape(-1, 3)
 
         return primary_colors_rgb
     
-    def determine_contours(self, image, primary_colors, color_threshold = 30):
-        """
-        Calculates contours based on primary color masks and displays contours over the mask.
+    # def determine_contours(self, image, primary_colors, color_threshold = 30):
+    #     """
+    #     Calculates contours based on primary color masks and displays contours over the mask.
 
-        Parameters:
-        - image: Input RGB image.
-        - contour_mask: Binary mask for the region of interest.
-        - primary_colors: List of RGB cluster colors.
-        - color_threshold: Threshold for color similarity in LAB space.
+    #     Parameters:
+    #     - image: Input RGB image.
+    #     - contour_mask: Binary mask for the region of interest.
+    #     - primary_colors: List of RGB cluster colors.
+    #     - color_threshold: Threshold for color similarity in LAB space.
 
-        Returns:
-        - contours_dict: Dictionary with primary colors as keys and lists of contours as values.
-        """
-        lab_image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-        contours_dict = {}
-        primary_color_masks = np.zeros((image.shape[0], image.shape[1], len(primary_colors)), dtype=np.uint8)
+    #     Returns:
+    #     - contours_dict: Dictionary with primary colors as keys and lists of contours as values.
+    #     """
+    #     lab_image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+    #     contours_dict = {}
+    #     primary_color_masks = np.zeros((image.shape[0], image.shape[1], len(primary_colors)), dtype=np.uint8)
 
-        for i, color in enumerate(primary_colors):
-            color_lab = cv2.cvtColor(np.uint8([[color]]), cv2.COLOR_RGB2LAB)[0][0]
-            diff = np.linalg.norm(lab_image.astype(np.int16) - color_lab.astype(np.int16), axis=2)
-            primary_color_masks[:, :, i] = (diff < color_threshold).astype(np.uint8) * 255
+    #     for i, color in enumerate(primary_colors):
+    #         color_lab = cv2.cvtColor(np.uint8([[color]]), cv2.COLOR_RGB2LAB)[0][0]
+    #         diff = np.linalg.norm(lab_image.astype(np.int16) - color_lab.astype(np.int16), axis=2)
+    #         primary_color_masks[:, :, i] = (diff < color_threshold).astype(np.uint8) * 255
             
-            #TODO: check how to implement - trying to remove gap between contours
-            # if i == 0:
-            #     kernel = np.ones((3, 3), np.uint8)
-            #     primary_color_masks[:, :, i] = cv2.dilate(primary_color_masks[:, :, i], kernel, iterations=1)
+    #         #TODO: check how to implement - trying to remove gap between contours
+    #         # if i == 0:
+    #         #     kernel = np.ones((3, 3), np.uint8)
+    #         #     primary_color_masks[:, :, i] = cv2.dilate(primary_color_masks[:, :, i], kernel, iterations=1)
 
-        for i, color in enumerate(primary_colors):
-            contours, hierarchy = cv2.findContours(primary_color_masks[:, :, i], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            contours_dict[tuple(color)] = contours
-            mask_with_contours = cv2.cvtColor(primary_color_masks[:, :, i], cv2.COLOR_GRAY2BGR) 
-            cv2.drawContours(mask_with_contours, contours, -1, (255, 255, 0), thickness=1)
+    #     for i, color in enumerate(primary_colors):
+    #         contours, hierarchy = cv2.findContours(primary_color_masks[:, :, i], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    #         contours_dict[tuple(color)] = contours
+    #         mask_with_contours = cv2.cvtColor(primary_color_masks[:, :, i], cv2.COLOR_GRAY2BGR) 
+    #         cv2.drawContours(mask_with_contours, contours, -1, (255, 255, 0), thickness=1)
 
-        return contours_dict
+    #     return contours_dict
             
     def determine_closest_color(self, image, contour_mask, primary_colors, method="LAB"):
         """
@@ -328,16 +464,19 @@ class ProductionMapGenerator:
         # Write the classified image to a new GeoTIFF file
         with rasterio.open(output_filename, 'w', **profile) as dst:
             if len(image.shape) == 3:
-                # If the image is RGB, write each band separately
+                # RGB, write each band separately
                 for i in range(3):
                     dst.write(image[:, :, i], i + 1)
             else:
-                # If the image is single-band, write it directly
+                #single-band
                 dst.write(image, 1)
 
     def polygonize_raster(self, raster_path, output_path, layer_name):
         """
         Polygonizes a raster file using gdal_polygonize.py.
+        This utility creates vector polygons for all connected regions of pixels in the raster sharing a common pixel value. 
+        Each polygon is created with an attribute indicating the pixel value of that polygon. 
+        A raster mask may also be provided to determine which pixels are eligible for processing.
 
         Args:
             raster_path (str): Path to the input raster file.
@@ -355,6 +494,41 @@ class ProductionMapGenerator:
         ]
         
         subprocess.run(cmd, check=True)
+
+    def add_color_based_on_label(output_path, layer_name, label_to_color):
+        """
+        Adds a 'color' property to the layer based on the 'label' value.
+
+        Args:
+            output_path (str): Path to the GeoPackage file.
+            layer_name (str): Name of the layer to modify.
+            label_to_color (dict): Mapping from label to color.
+        """
+        # # Define a mapping from label to color
+        # label_to_color = {
+        #     1: "red",
+        #     2: "blue",
+        #     3: "green",
+        #     4: "yellow",
+        #     5: "purple"
+        # }
+
+        # Add the 'color' column
+        subprocess.run([
+            "ogrinfo",
+            output_path,
+            "-sql",
+            f"ALTER TABLE {layer_name} ADD COLUMN color TEXT"
+        ], check=True)
+
+        # Update the 'color' column based on the 'label' value
+        for label, color in label_to_color.items():
+            subprocess.run([
+                "ogrinfo",
+                output_path,
+                "-sql",
+                f"UPDATE {layer_name} SET color = '{color}' WHERE label = {label}"
+            ], check=True)
 
     def simplify_polygons(self, input_gpkg, output_gpkg, layer_name, tolerance):
         """
@@ -405,7 +579,7 @@ class ProductionMapGenerator:
         #original_pixel_size_x = 0.05
         #original_pixel_size_y = 0.05
         if self.downsample_size > 0:
-            image = self.downsample_image(self.input_file_paths[0], self.downsample_size)
+            image = self.downsample_image(self.input_file_path, self.downsample_size)
             #original_pixel_size_x = self.dataset_downsampled.transform[0]
             #original_pixel_size_y = -self.dataset_downsampled.transform[4]
             #scale_factor = self.dataset_downsampled.transform[0] / self.dataset.transform[0]
@@ -426,7 +600,7 @@ class ProductionMapGenerator:
         self.apply_morphological_operators(classified_image, contour_mask, primary_colors)
     
         # Convert the classified image to a label index image
-        label_index_image = self.convert_to_label_index_image(classified_image)
+        label_index_image, label_to_color = self.convert_to_label_index_image(classified_image)
     
         # Upsample the label index image
         upsampled_label_index_image = self.upsample_image(label_index_image, self.dataset.height, self.dataset.width)
@@ -440,6 +614,7 @@ class ProductionMapGenerator:
         
         tmp_polygonize_raster_path = os.path.join(tmp_dir_path, 'polygonized_raster.gpkg')
         tmp_layer = "polygonized_layer"
+        
         # Polygonize the raster
         self.polygonize_raster(
             tmp_labeled_image_path,
@@ -471,49 +646,49 @@ class ProductionMapGenerator:
         
         #return self.generate_geojson(upsampled_contours_dict)
 
-    def generate_geojson(self, contours_dict, output_geojson="output.geojson"):
-        """
-        Converts OpenCV contours into a GeoJSON format with correct latitude/longitude coordinates.
+        # def generate_geojson(self, contours_dict, output_geojson="output.geojson"):
+        #     """
+        #     Converts OpenCV contours into a GeoJSON format with correct latitude/longitude coordinates.
 
-        Parameters:
-        - contours_dict (dict): Dictionary where keys are colors, and values are lists of contours.
-        - output_geojson (str): File path to save the GeoJSON output.
+        #     Parameters:
+        #     - contours_dict (dict): Dictionary where keys are colors, and values are lists of contours.
+        #     - output_geojson (str): File path to save the GeoJSON output.
 
-        Returns:
-        - geojson_data (dict): GeoJSON dictionary.
-        """
+        #     Returns:
+        #     - geojson_data (dict): GeoJSON dictionary.
+        #     """
 
-        # Create a transformer to convert from raster CRS to WGS84
-        transformer = Transformer.from_crs(self.dataset.crs, "EPSG:4326", always_xy=True)
+        #     # Create a transformer to convert from raster CRS to WGS84
+        #     transformer = Transformer.from_crs(self.dataset.crs, "EPSG:4326", always_xy=True)
 
-        features = []
+        #     features = []
 
-        for color, contours in contours_dict.items():
-            for contour in contours:
-                # Convert pixel coordinates (row, col) to real-world (easting, northing)
-                real_world_coords = [rasterio.transform.xy(self.dataset.transform, y, x) for x, y in contour.squeeze()]
+        #     for color, contours in contours_dict.items():
+        #         for contour in contours:
+        #             # Convert pixel coordinates (row, col) to real-world (easting, northing)
+        #             real_world_coords = [rasterio.transform.xy(self.dataset.transform, y, x) for x, y in contour.squeeze()]
 
-                # Convert real-world (easting, northing) to WGS84 (longitude, latitude)
-                geo_coords_wgs84 = [transformer.transform(x, y) for x, y in real_world_coords]
+        #             # Convert real-world (easting, northing) to WGS84 (longitude, latitude)
+        #             geo_coords_wgs84 = [transformer.transform(x, y) for x, y in real_world_coords]
 
-                if geo_coords_wgs84[0] != geo_coords_wgs84[-1]:
-                    geo_coords_wgs84.append(geo_coords_wgs84[0])
+        #             if geo_coords_wgs84[0] != geo_coords_wgs84[-1]:
+        #                 geo_coords_wgs84.append(geo_coords_wgs84[0])
 
-                polygon = Polygon(geo_coords_wgs84)
+        #             polygon = Polygon(geo_coords_wgs84)
 
-                # Create a valid GeoJSON polygon with color metadata
-                feature = geojson.Feature(geometry=geojson.Polygon(
-                                         [list(polygon.exterior.coords)]),
-                                          properties={"color": str(color)})
-                
-                features.append(feature)
+        #             # Create a valid GeoJSON polygon with color metadata
+        #             feature = geojson.Feature(geometry=geojson.Polygon(
+        #                                      [list(polygon.exterior.coords)]),
+        #                                       properties={"color": str(color)})
+                    
+        #             features.append(feature)
 
-        geojson_data = geojson.FeatureCollection(features)
+        #     geojson_data = geojson.FeatureCollection(features)
 
-        # Save GeoJSON to a file
-        with open(self.output_file_path, "w") as f:
-            geojson.dump(geojson_data, f, indent=2)
+        #     # Save GeoJSON to a file
+        #     with open(self.output_file_path, "w") as f:
+        #         geojson.dump(geojson_data, f, indent=2)
 
-        #print(f"GeoJSON saved to {output_geojson} in WGS84 format (Lat/Lon)")
-        return geojson_data
+        #     #print(f"GeoJSON saved to {output_geojson} in WGS84 format (Lat/Lon)")
+        #     return geojson_data
 

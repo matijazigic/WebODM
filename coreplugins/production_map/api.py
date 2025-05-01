@@ -36,20 +36,39 @@ def calc_production_map(ndvi_image_paths, task_id, downsample_size, num_of_zones
         try:
             # Import from coreplugins if using Docker
             from coreplugins.production_map.core import (
-                ProductionMapGenerator
+                ProductionMapGenerator, RasterAveragingProcessor
             )
-            
+
         except ImportError:
             pass
             # Import from plugins if imported as a plugin on exe application
             from plugins.production_map.core import (
-                ProductionMapGenerator
+                ProductionMapGenerator, RasterAveragingProcessor
                 )
-        
+            
         try:
-            logger.info(f"Processing ... {ndvi_image_paths[0]}")
-            with ProductionMapGenerator(ndvi_image_paths, downsample_size, num_of_zones, output_path) as generator:
+            logger.info(f"Processing ... {ndvi_image_paths}")
+            
+            with RasterAveragingProcessor() as averagingProcessor:
+                align_rasters_dir = os.path.join(production_map_dir, 'aligned_rasters')
+                if not os.path.exists(align_rasters_dir):
+                    os.makedirs(align_rasters_dir)
+                
+                aligned_rasters = averagingProcessor.align_rasters(ndvi_image_paths, align_rasters_dir)
+                
+                averaged_raster_dir = os.path.join(production_map_dir, 'averaged_raster')
+                if not os.path.exists(averaged_raster_dir):
+                    os.makedirs(averaged_raster_dir)
+                    
+                avg_filename = f"averaged_raster_{task_id}.tif"
+                avg_file_path = os.path.join(averaged_raster_dir, avg_filename)
+                    
+                averagingProcessor.average_rasters(aligned_rasters, avg_file_path)
+        
+                
+            with ProductionMapGenerator(avg_file_path, downsample_size, num_of_zones, output_path) as generator:
                 generator.process()
+                
             logger.info(f"End...")
         
         except Exception as e:

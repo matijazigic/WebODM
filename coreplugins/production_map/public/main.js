@@ -21,9 +21,11 @@ hasBands = (bands, orthophoto_bands) => {
 
 
 for (var i = 0; i < args.tiles.length; i++){
-    if(args.tiles[i].meta.task && hasBands(["red", "green", "nir"], args.tiles[i].meta.task.orthophoto_bands)) {
-        console.log(args.tiles[i].meta.task);
 
+    //console.log('Task: ', args.tiles[i].meta.task);
+
+    if(args.tiles[i].meta.task && hasBands(["red", "green", "nir"], args.tiles[i].meta.task.orthophoto_bands)) {
+        
         var task = args.tiles[i].meta.task;
         
         const { url } = args.tiles[i];
