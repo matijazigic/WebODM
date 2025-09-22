@@ -68,8 +68,6 @@ def calc_production_map(ndvi_image_paths, task_id, downsample_size, num_of_zones
                 
             with ProductionMapGenerator(avg_file_path, downsample_size, num_of_zones, output_path) as generator:
                 generator.process()
-                
-            logger.info(f"End...")
         
         except Exception as e:
             logger.info(f"An error occurred: {e}")

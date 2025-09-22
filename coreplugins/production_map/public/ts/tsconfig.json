@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2020", // Modern JavaScript version
+    "module": "ESNext", // Use ES modules
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "outDir": "./dist", // Output directory for compiled files
+    "declaration": true // Generate type declaration files
+  }
+}

@@ -19,7 +19,6 @@ hasBands = (bands, orthophoto_bands) => {
     return true;
   }
 
-
 for (var i = 0; i < args.tiles.length; i++){
 
     //console.log('Task: ', args.tiles[i].meta.task);

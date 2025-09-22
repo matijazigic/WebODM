@@ -16,8 +16,8 @@ class ISOXMLGenerator {
         this.options = options;
         const gridParamsGenerator = createGridParamsGenerator(1, 1);
         const managerOptions = {
-            fmisTitle: "Open Drone Map Production Map Plugin",
-            fmisVersion: "0.0.0.1",
+            fmisTitle: "ODM MZ",
+            fmisVersion: "0.0.1",
             version: 3,
             gridParamsGenerator,
         };
@@ -140,6 +140,7 @@ class ISOXMLGenerator {
         const culturalPractice = this.isoxmlManager.createEntityFromAttributes(TAGS.CulturalPractice, {
             CulturalPracticeDesignator: this.options.culturalPracticeName,
         });
+
         this.isoxmlManager.registerEntity(culturalPractice);
         this.isoxmlManager.rootElement.attributes.CulturalPractice = [
             culturalPractice,
@@ -661,6 +662,10 @@ export default class ProductionMapPanel extends React.Component {
     };
 
     handleExport = (zoneValues, geoJson, selectedAction, selectedUnit) => {
+            
+        let selectedActionKey = Object.entries(SelectedActionDictionary).find(([key, val]) => val === selectedAction)?.[0];
+
+        console.log("Selected action key:", selectedActionKey);
 
         const generator = new ISOXMLGenerator({
             zoneValues: zoneValues,
@@ -678,9 +683,10 @@ export default class ProductionMapPanel extends React.Component {
                 FarmState: "Shire",
             },
             partfieldName: "Bag End Field",
-            productGroupName: DescriptionActionDictionary[selectedAction.toUpperCase()],
-            culturalPracticeName: DescriptionActionDictionary[selectedAction.toUpperCase()],
-            productName: DescriptionActionDictionary[selectedAction.toUpperCase()],
+            
+            productGroupName: DescriptionActionDictionary[selectedActionKey],
+            culturalPracticeName: DescriptionActionDictionary[selectedActionKey],
+            productName: DescriptionActionDictionary[selectedActionKey],
             valuePresentation: {
                 Offset: 0,
                 Scale: ResolutionDictionary[selectedUnit] / ConversionFactorDictionary[selectedUnit],
